@@ -1,0 +1,425 @@
+
+//constructor
+template <typename N, typename E>
+Graph<N,E>::Graph(){}
+
+//copy constructor
+template <typename N, typename E>
+template <typename N2, typename E2>
+Graph<N,E>::Graph(const Graph<N2, E2> &g){
+	nodeVector_ = copyNodeVector( g.getNodeVector()),
+	it = nodeVector_.cbegin();
+}
+
+
+//move constructor
+template <typename N, typename E>
+template <typename N2, typename E2>
+Graph<N,E>::Graph(Graph<N2, E2> &&g):nodeVector_{std::move(g.nodeVector_)}, it{nodeVector_.cbegin()}{}
+
+
+//copy assignment
+template <typename N, typename E>
+template <typename N2, typename E2>
+Graph<N,E>& Graph<N,E>::operator=(const Graph<N2, E2> &g){
+	if (this != &g) {
+		clear();
+		nodeVector_ = copyNodeVector( g.getNodeVector());
+		it = nodeVector_.cbegin();
+	}
+	return *this;
+}
+
+// move assignment
+template <typename N, typename E>
+template <typename N2, typename E2>
+Graph<N,E>& Graph<N,E>::operator=(Graph<N2, E2> &&g){
+	if (this != &g) {
+		clear();
+		nodeVector_ = std::move(g.nodeVector_); 
+		it = nodeVector_.cbegin();
+	}
+	return *this;
+}
+
+//Destructor
+template <typename N, typename E>
+Graph<N,E>::~Graph(){}
+
+
+// ===================Graph functions==================
+
+//Adds a new node with value val to the graph. 
+template <typename N, typename E>
+bool Graph<N,E>::addNode(const N& v){
+
+	if(isNode(v)) return false;
+
+	Node newNode{v};
+	nodeVector_.push_back(newNode);
+	return true;
+}
+
+// Adds a new edge src → dst with weight w. 
+template <typename N, typename E>
+bool Graph<N,E>::addEdge(const N& src, const N& dst, const E& w){
+	
+	if(isNode(src)==0) throw std::runtime_error("src is not in the graph"); 
+	Node& srcNode = getNode(src);
+	
+	if(isNode(dst)==0) throw std::runtime_error("dst is not in the graph");
+	Node& dstNode = getNode(dst);
+	
+	return srcNode.makeEdge(dstNode,w);
+}
+
+//Replaces the original data, by the replacement data, newData.
+template <typename N, typename E>
+bool Graph<N,E>::replace(const N& oldData, const N& newData){
+	if (!isNode(oldData)) throw std::runtime_error("oldData is not in the graph"); 
+	if (isNode(newData)) return false;
+
+	Node& oldNode = getNode(oldData);
+	oldNode.freeSharePtr();
+	oldNode.setSharePtr(newData);
+	return true;
+}
+
+//Replace the old data with new data, modify in/out edge and remove duplicated
+template <typename N, typename E>
+void Graph<N,E>::mergeReplace(const N& oldData, const N& newData){
+	if(isNode(oldData)==0) throw std::runtime_error("src is not in the graph"); 
+	Node& srcNode = getNode(oldData);
+
+	if(isNode(newData)==0) throw std::runtime_error("dst is not in the graph");
+	Node& dstNode = getNode(newData);
+
+	auto p = nodeVector_.begin();
+	auto pt = p;
+
+	//change all other nodes that have edge going to oldnode now to new node (incomming edge)
+	while( p != nodeVector_.end()){
+		if( *(p->getSharePtr()) == oldData ){
+			pt = p;
+		}else {
+			p->modifyEdge(oldData, dstNode);
+		}
+		p++;
+	}
+	
+	//changde the outgoing edge, become start from new Node
+	for(auto edge: srcNode.getEdgeVector()){	
+		auto destNodeName = *(edge.getWeakPtr().lock());
+		auto weight = edge.getweight();	
+		if (*edge.getWeakPtr().lock() != oldData)
+			addEdge(newData, destNodeName,weight);
+	}
+	nodeVector_.erase(pt);
+	
+}
+
+//delete node from nodeVector_ and share_ptr<N>
+template <typename N, typename E>
+void Graph<N,E>::deleteNode(const N& v) noexcept{
+	if(!isNode(v)) return;
+
+	auto p = nodeVector_.begin();
+	auto pt = p;
+	while( p != nodeVector_.end()){
+		if(v == *(p->getSharePtr())){
+			pt = p;
+		}else {
+			p->deleteEdgeFromNode(v);
+			p->setDegree(p->getEdgeVector().size());
+		}
+		p++;
+	}
+	nodeVector_.erase(pt);
+}
+
+//delete edge from graph match weight
+template <typename N, typename E>
+void Graph<N,E>::deleteEdge(const N& src, const N& dst, const E& w) noexcept{
+	if (isNode(src)==0 ||isNode(dst)==0) return;
+	Node& srcNode = getNode(src);
+	srcNode.deleteEdgeFromNode_matchWeight(dst, w);
+}
+
+//Remove all nodes and edges from the graph
+template <typename N, typename E>
+void Graph<N,E>::clear() noexcept{
+	nodeVector_.clear();
+}
+
+//Returns true if a node with value val exists 
+//in the graph and false otherwise.
+template <typename N, typename E>
+bool Graph<N,E>::isNode(const N& val) const{
+	std::shared_ptr<N> sp = std::make_shared<N>(val);
+	for(auto p = nodeVector_.begin();p != nodeVector_.end(); p++){	
+		if (*sp == *((*p).getSharePtr())){
+			return true;
+		}
+	}
+	return false;
+}
+
+// N& src -> Node srcnode -> N& dst
+template <typename N, typename E>
+bool Graph<N,E>::isConnected(const N& src, const N& dst) const{
+
+	if(isNode(src)==0) throw std::runtime_error("src is not in the graph"); 
+	if(isNode(dst)==0) throw std::runtime_error("either dst is not in the graph");
+	
+	auto srcNode = std::find_if(nodeVector_.begin(), nodeVector_.end(),[src](const Node& a){ 
+		return *(a.getSharePtr()) == src;});
+
+	if (srcNode->checkIsConnected(dst))
+		return true;
+	else 
+		return false;
+}
+
+//print all nodes in the graph (min->max outdegree)
+template <typename N, typename E>
+void Graph<N,E>::printNodes() const{ 
+
+	std::vector<Node> temp = nodeVector_;
+
+	std::stable_sort(temp.begin(), temp.end(),[](const Node& a, const Node& b){ 
+		if(a.getDegree()==b.getDegree()) return *(a.getSharePtr()) < *(b.getSharePtr());  
+		return a.getDegree() < b.getDegree();});
+
+	for(auto i : temp)
+		if(i.getSharePtr()!= NULL)
+			std::cout  << *(i.getSharePtr()) <<std::endl;
+}
+
+//print all edges that start from node(with value val) 
+template <typename N, typename E>
+void Graph<N,E>::printEdges(const N& val) const{
+	if (!isNode(val)) throw std::runtime_error(""); 
+	std::cout<< "Edges attached to Node "<< val << std::endl;
+
+	//(min->max node value)
+	for(auto p = nodeVector_.begin();p != nodeVector_.end(); p++) 
+		if (val == *((*p).getSharePtr()))
+			(*p).printEdgeVector();
+			
+}
+// =======ITERATOR========
+
+//point to first node
+template <typename N, typename E>
+void Graph<N,E>::begin() const{
+	it = nodeVector_.cbegin();
+}
+
+//point to last node
+template <typename N, typename E>
+bool Graph<N,E>::end() const{
+	if(it == nodeVector_.cend()) {	
+		return true;
+	}
+	else {
+		return false;
+	}
+}
+
+//get next node
+template <typename N, typename E>
+void Graph<N,E>::next() const{
+	it = std::next( it, 1);
+
+}
+
+//return value of the node
+template <typename N, typename E>
+const N&  Graph<N,E>::value() const{
+	return *(it->getSharePtr());
+}
+
+//return the node with value v from the graph
+template <typename N, typename E>
+typename Graph<N,E>::Node&  Graph<N,E>::getNode(const N& v ){
+	auto p = nodeVector_.begin();
+	for(;p != nodeVector_.end(); p++) 
+		if (v == *((*p).getSharePtr()))
+			break;	
+	return *p;
+}
+
+//recieve a nodeVector, copy and return a new nodeVector
+template <typename N, typename E>
+std::vector<typename Graph<N,E>::Node> Graph<N,E>::copyNodeVector(const std::vector<Node> original){
+	std::vector<Node> newNodeVector;
+	for(auto node: original){
+		Node newNode{node};
+		newNodeVector->push_back(newNode);
+	}
+	return newNodeVector;
+}
+
+// ===========================Node functions===========================
+
+//node constructor
+template <typename N, typename E>
+Graph<N,E>::Node::Node(const N& value):
+	outDegree_{0}, sp_N_{std::make_shared<N>(value)}{} 
+
+
+//node copy constructor
+template <typename N, typename E>
+Graph<N,E>::Node::Node(const Node& node):
+	outDegree_{node.getDegree()},
+	edgeVector_{copyEdgeVector(node.edgeVector_)},
+	sp_N_ {node.getSharePtr()}{} 
+
+//given a edge vector, copy and return a new edge vector
+template <typename N, typename E>
+std::vector<typename Graph<N,E>::Node::Edge> Graph<N,E>::Node::copyEdgeVector(const std::vector<Edge> original){
+	std::vector<Edge> newEdgeVector;
+
+	for(auto edge: original){
+		Edge newEdge{edge};
+		newEdgeVector.push_back(newEdge);
+	}
+	return newEdgeVector;
+}
+
+//return true if their exist this edge
+template <typename N, typename E>
+bool Graph<N,E>::Node::makeEdge(Node& dst, E w){
+	if(isEdge(dst, w)) return false;
+	
+	Edge newEdge{dst, w};
+	edgeVector_.push_back(newEdge);
+	outDegree_ +=1;
+	return true;
+
+}
+
+//print the edge(dest & weight) in the edgeVector
+template <typename N, typename E>
+void Graph<N,E>::Node::printEdgeVector() const{
+
+	if(outDegree_ == 0) {
+		std::cout << "(null)"<< std::endl;
+		return;
+	}
+
+	std::vector<Edge> temp = edgeVector_;
+
+	std::stable_sort(temp.begin(), temp.end(),[](const Edge& a, const Edge& b){ 
+		if(a.getweight()==b.getweight()) 
+			return *(a.getWeakPtr().lock()) < *(b.getWeakPtr().lock());  
+		return a.getweight() < b.getweight();});
+
+	for(auto p : temp){
+		std::shared_ptr<N> sp = p.getWeakPtr().lock();
+		if (sp !=NULL) std::cout << *sp <<  " "<<p.getweight() <<  std::endl;
+	}
+}
+
+
+//redirect edge originally to oldData, to dstNOde
+template <typename N, typename E>
+void Graph<N,E>::Node::modifyEdge(const N& oldData, Node& dstNode){
+	
+	auto presult = edgeVector_.begin();
+
+	while(presult != edgeVector_.end()){
+	
+		//if dest is oldnode
+		if (*(presult->getWeakPtr().lock()) == oldData){
+    		outDegree_--;
+
+    		if (!isEdge(dstNode, presult->getweight())){
+    			presult->setWeakPtr(dstNode);
+    			outDegree_++;
+    			presult++;
+    		}else {
+    			edgeVector_.erase(presult);
+    		}
+    	}
+    	else presult++;
+	}
+}
+
+
+template <typename N, typename E>
+bool Graph<N,E>::Node::isEdge(Node& dst, E w){
+
+	auto presult = std::find_if(edgeVector_.begin(), edgeVector_.end(), [&](const Edge & edge) {
+	    return *(edge.getWeakPtr().lock()) == *(dst.getSharePtr()) && edge.getweight() == w ;
+	});
+
+	if (presult == edgeVector_.end()) return false;
+	else return true;
+	
+}
+
+// Node src -> N& dst
+//return true if the two nodes are connected
+template <typename N, typename E>
+bool Graph<N,E>::Node::checkIsConnected(const N& dst) const{
+	auto presult = std::find_if(edgeVector_.begin(), edgeVector_.end(), [&](const Edge & edge) {
+	    return *(edge.getWeakPtr().lock()) == dst ;
+	});
+	if (presult == edgeVector_.end())
+		return false;
+	else
+		return true;
+}
+
+//delete edge comming to this node
+template <typename N, typename E>
+void Graph<N,E>::Node::deleteEdgeFromNode(const N& dst){
+	
+	auto presult = edgeVector_.begin();
+	int i = 0;
+
+	while(presult != edgeVector_.end()){
+    	if (*(presult->getWeakPtr().lock()) == dst ){
+    		presult->freeWeakPtr();	
+    		edgeVector_.erase(edgeVector_.begin()+i);
+    	}
+    	else presult ++;
+	}
+}
+
+//delete the outgoing edge with the given weight
+template <typename N, typename E>
+void Graph<N,E>::Node::deleteEdgeFromNode_matchWeight(const N& dst, const E& w){
+	auto presult = edgeVector_.begin();
+
+	while(presult != edgeVector_.end()){
+
+		if (*(presult->getWeakPtr().lock()) == dst and presult->getweight() == w){
+    		presult->freeWeakPtr();	
+    		edgeVector_.erase(presult);
+    	}
+    	else presult ++;
+	}
+}
+
+// ===================Edge functions===========================
+//edge constructor
+template <typename N, typename E>
+Graph<N,E>::Node::Edge::Edge(Node& dst, E& w):
+	wp_N_{dst.getSharePtr()}, weight{w}{}
+
+//edge copy constructor
+template <typename N, typename E>
+Graph<N,E>::Node::Edge::Edge(const Edge& original):wp_N_{original.getWeakPtr().lock()},
+	weight{original.getweight()}{}
+
+//destructor
+template <typename N, typename E>
+Graph<N,E>::Node::Edge::~Edge(){
+	wp_N_.reset();
+}
+
+
+
+
